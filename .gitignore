@@ -1,0 +1,6 @@
+.env.development
+.env
+/node_modules
+/.vscode
+/dist
+*.log
