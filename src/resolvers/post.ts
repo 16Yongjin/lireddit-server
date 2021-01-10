@@ -38,7 +38,7 @@ class PaginatedPosts {
 
 @Resolver(Post)
 export class PostResolver {
-  @FieldResolver(() => String) 
+  @FieldResolver(() => String)
   textSnippet(@Root() root: Post) {
     return root.text.slice(0, 50)
   }
@@ -51,33 +51,52 @@ export class PostResolver {
     @Ctx() { req }: MyContext
   ) {
     const { userId } = req.session
-    const isUpdoot = value !== -1 
+    const isUpdoot = value !== -1
     const voteValue = isUpdoot ? 1 : -1
-    await Updoot.insert({
-      userId,
-      postId,
-      value: voteValue,
-    })
 
-    await getConnection().query(`
-    update post p
-    set p.points = p.points + $1
-    where p.id = $2
-    `, [voteValue, postId])
+    const updoot = await Updoot.findOne({ where: { userId, postId } })
 
-    
+    if (updoot && updoot.value !== voteValue) {
+      // 이미 투표 완료 but 값 변경 시도
+      await getConnection().transaction(async (tm) => {
+        await tm.query(`
+          update updoot
+          set value = ${voteValue}
+          where "postId" = ${postId} and "userId" = ${userId}
+        `)
+
+        await tm.query(`
+          update post
+          set points = points + ${voteValue * 2}
+          where id = ${postId};
+        `)
+      })
+    } else if (!updoot) {
+      // 처음 투표함
+      await getConnection().transaction(async (tm) => {
+        await tm.query(`
+          insert into updoot ("userId", "postId", value)
+          values (${userId}, ${postId}, ${voteValue});
+        `)
+
+        await tm.query(`
+          update post
+          set points = points + ${voteValue}
+          where id = ${postId};
+        `)
+      })
+    }
     return true
   }
-
-
 
   @Query(() => PaginatedPosts)
   async posts(
     @Arg('limit', () => Int) limit: number,
     @Arg('cursor', () => String, { nullable: true }) cursor: string | null,
-    @Info() info: any
+    @Ctx() { req }: MyContext
   ): Promise<PaginatedPosts> {
-    console.log(info)
+    const { userId } = req.session
+    console.log('userId', userId)
     const realLimit = Math.max(Math.min(50, limit), 0)
     const realLimitPlusOne = realLimit + 1
 
@@ -96,10 +115,15 @@ export class PostResolver {
         'email', u.email,
         'createdAt', u."createdAt",
         'updatedAt', u."updatedAt"
-      ) creator
-      from post p 
+        ) creator,
+      ${
+        userId
+          ? `(select value from updoot where "userId"=${userId} and "postId"=p.id) "voteStatus"`
+          : 'null as "voteStatus"'
+      }
+      from post p
       inner join public.user u on u.id = p."creatorId"
-      ${cursor ? `where p."createdAt < $2` : ''}
+      ${cursor ? `where p."createdAt" < $2` : ''}
       order by p."createdAt" DESC
       limit $1
     `,
@@ -113,8 +137,8 @@ export class PostResolver {
   }
 
   @Query(() => Post, { nullable: true })
-  post(@Arg('id') id: number): Promise<Post | undefined> {
-    return Post.findOne(id)
+  post(@Arg('id', () => Int) id: number): Promise<Post | undefined> {
+    return Post.findOne(id, { relations: ['creator'] })
   }
 
   @Mutation(() => Post)
@@ -131,23 +155,40 @@ export class PostResolver {
 
   @Mutation(() => Post, { nullable: true })
   async updatePost(
-    @Arg('id') id: number,
-    @Arg('title', () => String, { nullable: true }) title: string
+    @Arg('id', () => Int) id: number,
+    @Arg('title') title: string,
+    @Arg('text') text: string,
+    @Ctx() { req }: MyContext
   ): Promise<Post | null> {
-    const post = await Post.findOne(id)
-    if (!post) return null
+    const { userId: creatorId } = req.session
 
-    if (typeof title !== 'undefined') {
-      post.title = title
-      Post.update({ id }, { title })
-    }
+    const result = await getConnection()
+      .createQueryBuilder()
+      .update(Post)
+      .set({ title, text })
+      .where('id = :id and "creatorId" = :creatorId', { id, creatorId })
+      .returning('*')
+      .execute()
 
-    return post
+    return result.raw[0]
   }
 
   @Mutation(() => Boolean)
-  async deletePost(@Arg('id') id: number): Promise<boolean> {
-    await Post.delete(id)
+  @UseMiddleware(isAuth)
+  async deletePost(
+    @Arg('id', () => Int) id: number,
+    @Ctx() { req }: MyContext
+  ): Promise<boolean> {
+    const { userId } = req.session
+
+    const post = await Post.findOne({ id })
+    if (!post) return false
+
+    if (post.creatorId !== userId) {
+      throw new Error('not authorized')
+    }
+
+    await Post.delete({ id, creatorId: userId })
     return true
   }
 }
