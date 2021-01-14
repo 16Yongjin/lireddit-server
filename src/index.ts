@@ -1,4 +1,4 @@
-import "dotenv/config"
+import 'dotenv/config'
 import 'reflect-metadata'
 import { COOKIE_NAME, __prod__ } from './constants'
 import express from 'express'
@@ -14,6 +14,8 @@ import { createConnection } from 'typeorm'
 import { Post, User } from './entities'
 import { join } from 'path'
 import { Updoot } from './entities/Updoot'
+import { createUserLoader } from './utils/createUserLoader'
+import { createUpdootLoader } from './utils/createUpdootLodader'
 
 const main = async () => {
   const conn = await createConnection({
@@ -69,6 +71,8 @@ const main = async () => {
       req,
       res,
       redis,
+      userLoader: createUserLoader(),
+      updootLoader: createUpdootLoader(),
     }),
   })
 
