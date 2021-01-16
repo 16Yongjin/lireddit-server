@@ -22,18 +22,19 @@ const main = async () => {
     type: 'postgres',
     url: process.env.DB_URL,
     logging: true,
-    synchronize: true,
+    // synchronize: true,
     migrations: [join(__dirname, './migrations/*')],
     entities: [Post, User, Updoot],
   })
 
-  await conn.runMigrations()
+  // await conn.runMigrations()
 
   const app = express()
 
   const RedisStore = connectRedis(session)
   const redis = new Redis(process.env.REDIS_URL)
 
+  app.set('trust proxy', 1)
   app.use(
     cors({
       origin: process.env.CORS_ORIGIN,
